@@ -178,10 +178,6 @@ class ACNN(nn.Module):
         #concatenate vector size
         self.kd = self.d * self.k
         #e1,e2,x embedding
-        self.e1_embedding = nn.Embedding(self.vac_len, self.dw)
-        self.e1_embedding.weight = nn.Parameter(torch.from_numpy(embedding))
-        self.e2_embedding = nn.Embedding(self.vac_len, self.dw)
-        self.e2_embedding.weight = nn.Parameter(torch.from_numpy(embedding))
         self.x_embedding = nn.Embedding(self.vac_len, self.dw)
         self.x_embedding.weight = nn.Parameter(torch.from_numpy(embedding))
         #pos embedding
@@ -211,41 +207,6 @@ class ACNN(nn.Module):
         #print t_px.size()
         return torch.cat([t_px, m_px, b_px], 2)
 
-    def new_input_attention(self, x, e1, e2, dist1, dist2, is_training=True):
-        bz = x.data.size()[0]
-        x_embed = self.x_embedding(x) # (bz, n, dw)
-        e1_embed = self.e1_embedding(e1)
-        e2_embed = self.e2_embedding(e2)
-        dist1_embed = self.dist1_embedding(dist1)
-        dist2_embed = self.dist2_embedding(dist2)
-        #print x_embed.size(),dist1_embed.size(),dist1_embed.size()
-        x_concat = torch.cat((x_embed, dist1_embed, dist2_embed), 2)
-        #print x_concat.size()
-        w_concat = self.window_cat(x_concat)
-        if is_training:
-            w_concat = self.dropout(w_concat)
-        W1 = self.We1.view(1, self.dw, self.dw).repeat(bz, 1, 1)
-        W2 = self.We2.view(1, self.dw, self.dw).repeat(bz, 1, 1)
-        W1x = torch.bmm(x_embed, W1)
-        W2x = torch.bmm(x_embed, W2)
-        A1 = torch.bmm(W1x, e1_embed.view(bz, self.dw, 1))  # (bz, n, 1)
-        A2 = torch.bmm(W2x, e2_embed.view(bz, self.dw, 1))
-        A1 = A1.view(bz, self.n)
-        A2 = A2.view(bz, self.n)
-        alpha1 = self.softmax(A1)
-        alpha2 = self.softmax(A2)
-        alpha = torch.div(torch.add(alpha1, alpha2), 2)
-        alpha = alpha.view(bz, self.n, 1).repeat(1, 1, self.kd)
-        #print w_concat.size(),alpha.size(),torch.mul(w_concat,alpha).size()
-        return torch.mul(w_concat, alpha)
-
-    def new_convolution(self, R):
-        s = R.data.size()  # bz, n, k*d
-        R = self.conv(R.view(s[0], 1, s[1], s[2]))  # bz, dc, n, 1
-        #print s,R.size()
-        R_star = R.view(s[0], self.dc, s[1])
-        return R_star  # bz, dc, n
-
     def attentive_pooling(self, R_star):
         rel_weight = self.y_embedding.weight
         #print rel_weight
@@ -260,25 +221,13 @@ class ACNN(nn.Module):
         wo = torch.bmm(R_star, AP)  # bz, dc, dc
         wo = self.max_pool(wo.view(bz, 1, self.dc, self.dc))
         return wo.view(bz, 1, self.dc).view(bz, self.dc), rel_weight
-
-    def forward(self, x, e1, e2, dist1, dist2, is_training=True):
-        R = self.new_input_attention(x, e1, e2, dist1, dist2, is_training)
-        R_star = self.new_convolution(R)
-        #print R_star.size()
-        wo, rel_weight = self.attentive_pooling(R_star)
-        wo = F.relu(wo)
-        #print wo.size(),rel_weight.size()
-        return wo, rel_weight
+		
 	def forward(self,x,e1,e2,dist1,dist2,is_training=True):
 		bz = x.data.size()[0]
 		x_embed = self.x_embedding(x) # (bz, n, dw)
-        e1_embed = self.e1_embedding(e1)
-        e2_embed = self.e2_embedding(e2)
         dist1_embed = self.dist1_embedding(dist1)
         dist2_embed = self.dist2_embedding(dist2)
-        #print x_embed.size(),dist1_embed.size(),dist1_embed.size()
         x_concat = torch.cat((x_embed, dist1_embed, dist2_embed), 2)
-        #print x_concat.size()
         w_concat = self.window_cat(x_concat)
         if is_training:
             w_concat = self.dropout(w_concat)
@@ -286,6 +235,10 @@ class ACNN(nn.Module):
         R = self.conv(w_concat.view(s[0], 1, s[1], s[2]))  # bz, dc, n, 1
         #print s,R.size()
         R_star = R.view(s[0], self.dc, s[1])
+		wo, rel_weight = self.attentive_pooling(R_star)
+		
+        wo = F.relu(wo)
+		return wo, rel_weight
 		
 class NovelDistanceLoss(nn.Module):
     def __init__(self, nr, margin=1):
