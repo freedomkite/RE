@@ -269,7 +269,24 @@ class ACNN(nn.Module):
         wo = F.relu(wo)
         #print wo.size(),rel_weight.size()
         return wo, rel_weight
-
+	def forward(self,x,e1,e2,dist1,dist2,is_training=True):
+		bz = x.data.size()[0]
+		x_embed = self.x_embedding(x) # (bz, n, dw)
+        e1_embed = self.e1_embedding(e1)
+        e2_embed = self.e2_embedding(e2)
+        dist1_embed = self.dist1_embedding(dist1)
+        dist2_embed = self.dist2_embedding(dist2)
+        #print x_embed.size(),dist1_embed.size(),dist1_embed.size()
+        x_concat = torch.cat((x_embed, dist1_embed, dist2_embed), 2)
+        #print x_concat.size()
+        w_concat = self.window_cat(x_concat)
+        if is_training:
+            w_concat = self.dropout(w_concat)
+		s = w_concat.data.size()  # bz, n, k*d
+        R = self.conv(w_concat.view(s[0], 1, s[1], s[2]))  # bz, dc, n, 1
+        #print s,R.size()
+        R_star = R.view(s[0], self.dc, s[1])
+		
 class NovelDistanceLoss(nn.Module):
     def __init__(self, nr, margin=1):
         super(NovelDistanceLoss, self).__init__()
