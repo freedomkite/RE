@@ -190,11 +190,9 @@ class ACNN(nn.Module):
         self.dropout = nn.Dropout(self.keep_prob)
         self.conv = nn.Conv2d(1, self.dc, (self.k, self.kd), (1, self.kd), (self.p, 0), bias=True)
         self.tanh = nn.Tanh()
-        self.U = nn.Parameter(torch.randn(self.dc, self.nr))
-        self.We1 = nn.Parameter(torch.randn(self.dw, self.dw))
-        self.We2 = nn.Parameter(torch.randn(self.dw, self.dw))
         self.max_pool = nn.MaxPool2d((1, self.dc), (1, self.dc))
         self.softmax = nn.Softmax()
+		self.fc1=nn.Linear(self.n,self.nr)
     #生成滑动窗口矩阵
     def window_cat(self, x_concat):
         s = x_concat.data.size()
@@ -207,20 +205,6 @@ class ACNN(nn.Module):
         #print t_px.size()
         return torch.cat([t_px, m_px, b_px], 2)
 
-    def attentive_pooling(self, R_star):
-        rel_weight = self.y_embedding.weight
-        #print rel_weight
-        bz = R_star.data.size()[0]
-
-        b_U = self.U.view(1, self.dc, self.nr).repeat(bz, 1, 1)
-        b_rel_w = rel_weight.view(1, self.nr, self.dc).repeat(bz, 1, 1)
-        G = torch.bmm(R_star.transpose(2, 1), b_U)  # (bz, n, nr)
-        G = torch.bmm(G, b_rel_w)  # (bz, n, dc)
-        AP = F.softmax(G)
-        AP = AP.view(bz, self.n, self.dc)
-        wo = torch.bmm(R_star, AP)  # bz, dc, dc
-        wo = self.max_pool(wo.view(bz, 1, self.dc, self.dc))
-        return wo.view(bz, 1, self.dc).view(bz, self.dc), rel_weight
 		
 	def forward(self,x,e1,e2,dist1,dist2,is_training=True):
 		bz = x.data.size()[0]
@@ -232,36 +216,13 @@ class ACNN(nn.Module):
         if is_training:
             w_concat = self.dropout(w_concat)
 		s = w_concat.data.size()  # bz, n, k*d
-        R = self.conv(w_concat.view(s[0], 1, s[1], s[2]))  # bz, dc, n, 1
+        R = self.tanh(self.conv(w_concat.view(s[0], 1, s[1], s[2]))) # bz, dc, n, 1
         #print s,R.size()
         R_star = R.view(s[0], self.dc, s[1])
-		wo, rel_weight = self.attentive_pooling(R_star)
-		
-        wo = F.relu(wo)
-		return wo, rel_weight
-		
-class NovelDistanceLoss(nn.Module):
-    def __init__(self, nr, margin=1):
-        super(NovelDistanceLoss, self).__init__()
-        self.nr = nr
-        self.margin = margin
-
-    def forward(self, wo, rel_weight, in_y):
-        wo_norm = F.normalize(wo)  # (bz, dc)
-        bz = wo_norm.data.size()[0]
-        dc = wo_norm.data.size()[1]
-        wo_norm_tile = wo_norm.view(-1, 1, dc).repeat(1, self.nr, 1)  # (bz, nr, dc)
-        batched_rel_w = F.normalize(rel_weight).view(1, self.nr, dc).repeat(bz, 1, 1)
-        all_distance = torch.norm(wo_norm_tile - batched_rel_w, 2, 2)  # (bz, nr, 1)
-        mask = one_hot(in_y, self.nr, 1000, 0)  # (bz, nr)
-        masked_y = torch.add(all_distance.view(bz, self.nr), mask)
-        neg_y = torch.min(masked_y, dim=1)[1]  # (bz,)
-        neg_y = torch.mm(one_hot(neg_y, self.nr), rel_weight)  # (bz, nr)*(nr, dc) => (bz, dc)
-        pos_y = torch.mm(one_hot(in_y, self.nr), rel_weight)
-        neg_distance = torch.norm(wo_norm - F.normalize(neg_y), 2, 1)
-        pos_distance = torch.norm(wo_norm - F.normalize(pos_y), 2, 1)
-        loss = torch.mean(pos_distance + self.margin - neg_distance)
-        return loss
+		R_star=self.max_pool(wo.view(bz,1,self.nr,self.dc)).sequeeze(2)
+		R_star=self.fc1(R_star)
+		R_star=self.softmax(R_star)
+		return R_star
 
 
 #train 
@@ -269,7 +230,8 @@ model = ACNN(N, embedding, DP, NP, K, NR, DC, KP).cuda()
 print model
 #optimizer = torch.optim.SGD(model.parameters(), lr=LR)  # optimize all rnn parameters
 optimizer = torch.optim.Adam(model.parameters())  # optimize all rnn parameters
-loss_func = NovelDistanceLoss(NR)
+#loss_func = NovelDistanceLoss(NR)
+loss_func=torch.nn.CrossEntropy()
 
 def data_unpack(cat_data, target):
     list_x = np.split(cat_data.numpy(), [N, N + 1, N + 2, N + 2 + NP], 1)
@@ -282,63 +244,46 @@ def data_unpack(cat_data, target):
     target = Variable(target).cuda()
     return bx, be1, be2, bd1, bd2, target
 
+#making data
+train=torch.from_numpy(np_cat.astype(np.int64))
+y_tensor=torch.LongTensor(y)
+train_datasets=D.TensorDataset(data_tensor=train,target_tensor=y_tensor)
+train_dataloader=D.DataLoader(train_datasets,BATCH_SIZE,True,num_workers=2)
 
-def prediction(wo, rel_weight, y, NR):
-    wo_norm = F.normalize(wo)
-    bz = wo_norm.data.size()[0]
-    dc = wo_norm.data.size()[1]
-    wo_norm_tile = wo_norm.view(bz, 1, dc).repeat(1, NR, 1)
-    batched_rel_w = F.normalize(rel_weight).view(1, NR, dc).repeat(bz, 1, 1)
-    all_distance = torch.norm(wo_norm_tile - batched_rel_w, 2, 2)
-    predict = torch.min(all_distance, 1)[1].long()
-    # print(predict)
-    correct = torch.eq(predict, y)
-    # print(correct)
-    acc = correct.sum().float() / float(correct.data.size()[0])
-    #print correct.sum(),correct.data.size()
-    return (acc * 100).cpu().data.numpy()[0]
+eval = torch.from_numpy(eval_cat.astype(np.int64))
+y_tensor = torch.LongTensor(ty)
+eval_datasets = D.TensorDataset(data_tensor=eval, target_tensor=y_tensor)
+eval_dataloader = D.DataLoader(eval_datasets, BATCH_SIZE, True, num_workers=2)
 
-'''begin training '''
+def prediction(out,y):
+	predict=torch.max(out,1)[1].long()
+	correct=torch.eq(predict,by)
+	acc=correct.sum().float()/float(correct.data.size()[0])
+	return acc
+#train
 for i in range(epochs):
     acc = 0
-    loss = 0
-    ''''''
-    '''固定生成batch数据格式，不变'''
-    train = torch.from_numpy(np_cat.astype(np.int64))
-    y_tensor = torch.LongTensor(y)
-    train_datasets = D.TensorDataset(data_tensor=train, target_tensor=y_tensor)
-    train_dataloader = D.DataLoader(train_datasets, BATCH_SIZE, True, num_workers=2)
-    ''''''
     j = 0
-    #print len(train_dataloader)
-    for (b_x_cat, b_y) in train_dataloader:
-        #batch_size,句子，e1,e2,pos
-        bx, be1, be2, bd1, bd2, by = data_unpack(b_x_cat, b_y)
-        wo, rel_weight = model(bx, be1, be2, bd1, bd2)
-        acc += prediction(wo, rel_weight, by, NR)
-        #print acc
-        l = loss_func(wo, rel_weight, by)
+	eval_acc = 0
+    eval_j = 0
+    for (x_cat, ty) in train_dataloader:
+        bx, be1, be2, bd1, bd2, by = data_unpack(x_cat, ty)
+        out = model(bx, be1, be2, bd1, bd2)
+		acc+=prediction(out,by)
+		loss=loss_func(out,by)
+		optimizer.zero_grad()
+		loss.backward()
+		optimizer.step()
         j += 1
-        #print j
-        optimizer.zero_grad()
-        l.backward()
-        optimizer.step()
-        loss += l
-    eval = torch.from_numpy(eval_cat.astype(np.int64))
-    eval_acc = 0
-    ti = 0
-    y_tensor = torch.LongTensor(ty)
-    eval_datasets = D.TensorDataset(data_tensor=eval, target_tensor=y_tensor)
-    eval_dataloader = D.DataLoader(eval_datasets, BATCH_SIZE, True, num_workers=2)
     for (b_x_cat, b_y) in eval_dataloader:
         bx, be1, be2, bd1, bd2, by = data_unpack(b_x_cat, b_y)
         wo, rel_weight = model(bx, be1, be2, bd1, bd2, False)
-        eval_acc += prediction(wo, rel_weight, by, NR)
-        ti += 1
+        eval_acc+=prediction(out,by)
+        eval_j += 1
     #print acc,j,acc/(j*50),eval_acc,ti,eval_acc/(ti*50)
-    print 'epoch:', i, 'acc:', acc / j, '%   loss:', loss.cpu().data.numpy()[0] / j, 'test_acc:', eval_acc / ti, '%'
-
-torch.save(model.state_dict(), 'acnn_params.pkl')
+    print 'epoch:', i, 'acc:', acc / j, '%   loss:', loss.cpu().data.numpy()[0] / j, 'test_acc:', eval_acc / eval_j, '%'
+	if i%10==0:
+		torch.save(model.state_dict(), 'cnn_pool.pkl')
 
 
 
