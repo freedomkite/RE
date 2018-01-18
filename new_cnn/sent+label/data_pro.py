@@ -8,11 +8,12 @@ import random
 #读取数据
 def load_data(file):
     sentences=[]
-	labels=[]
+    labels=[]
     with open(file,'r') as f_r:
         for line in f_r:
-            line=line.strip().decode('utf-8').split()
+            line=line.strip().decode('utf-8')
             if line:
+				#print line
 				tmp=line.split()
 				sentences.append(tmp[1:])
 				labels.append(tmp[0])
