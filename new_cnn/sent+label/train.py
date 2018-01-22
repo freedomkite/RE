@@ -35,7 +35,7 @@ parser.add_argument('-hidden_size',type=int,default=100)
 
 #parser.add_argument('-loc_size',type=int,default=loc_size)
 #parser.add_argument('-loc_dim',type=int,default=100)
-parser.add_argument('-batch_size',type=int,default=4)
+parser.add_argument('-batch_size',type=int,default=32)
 parser.add_argument('-class_num',type=int,default=class_num)
 parser.add_argument('-epochs',type=int,default=2000)
 parser.add_argument('-t_size',type=int,default=100)
@@ -127,8 +127,8 @@ if args.train=='true':
             #print 'x:', x, 'pos:', pos
             #print y
             #out = model1(x, pos,loc)
-			print x_cat
-			x_cat=Variable(x_cat)
+			#print x_cat
+			x_cat=Variable(torch.from_numpy(x_cat.numpy()))
 			y=Variable(y)
 			out=model1(x_cat)
             #print out.data,y

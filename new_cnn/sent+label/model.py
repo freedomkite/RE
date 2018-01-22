@@ -11,7 +11,7 @@ class BiLSTM(nn.Module):
         self.args = args
         self.embed = nn.Embedding(args.embed_num, args.embed_dim)
         #self.pos_embedding = nn.Embedding(args.pos_size, args.pos_dim)
-        #self.dropout = nn.Dropout(args.dropout)
+        self.dropout = nn.Dropout(args.dropout)
         self.lstm = nn.LSTM(args.embed_dim, args.hidden_size,
                             bidirectional=True,
                             batch_first=True,
@@ -22,13 +22,14 @@ class BiLSTM(nn.Module):
     def forward(self,x):
         hidden = (Variable(torch.zeros(2, x.size(0), self.args.hidden_size)),
                   Variable(torch.zeros(2, x.size(0), self.args.hidden_size)))
-        x_embed = self.embed(x)
-        print x_embed.size()
-        print hidden[0].size(),hidden[1].size()
+		
+        x= self.embed(x)
+        #print x_embed.size()
+        #print hidden[0].size(),hidden[1].size()
         #p_embed = self.pos_embedding(p)
         #x = torch.cat((x_embed, p_embed), 2)
         #x=self.dropout(x)
-        print type(x),hidden[0],hidden[1]
+        #print type(x),hidden[0],hidden[1]
         x, lstm_h = self.lstm(x, hidden)
         x = F.tanh(x)
         # for idx in range(x.size(0)):
